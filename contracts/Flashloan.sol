@@ -20,11 +20,55 @@ import "./libraries/Part.sol";
 import "./libraries/RouteUtils.sol";
 
 contract Flashloan is IFlashloan, DodoBase, FlashloanValidation, Withdraw {
+
+    // safematch is deprecated, use signedmatch now.
+    // using SignedMath for uint256;
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
+    // Events
     event SentProfit(address recipient, uint256 profit);
     event SwapFinished(address token, uint256 amount);
+
+
+    /**
+     * @dev Indicates a flash loan transaction with DODO protocol
+     * @param params Struct containing parameter for the flash loan
+     */
+    function executeFlashloan(
+        FlashParams memory params
+    ) external checkParams(params) {
+        // Encode the callback data to be send in the flash loan execution
+        // this includes sender's address, flash loan pool, loan amount, and routes for token swaps.
+        bytes memory data = abi.encode(
+            FlashParams({
+                flashLoanPool: params.flashLoanPool,
+                loanAmount: params.loanAmount,
+                routes: params.routes
+            })
+        );
+
+        address loanToken = RouteUtils.getInitialToken(params.routes[0]);
+        console.log(
+            "Contract balance before borrow",
+            IERC20(loanToken).balanceOf(address(this))
+        );
+
+        // equals when we are borrowing the base token.
+        uint256 baseAmount = IDODO(params.flashLoanPool)._BASE_TOKEN() ==
+            loanToken
+            ? params.loanAmount
+            : 0;
+        IDODO(params.flashLoanPool).Flashloan(
+            baseAmount,
+            quoteAmount,
+            adress(this),
+            data
+        );
+    }
+
+
+
 
     function dodoFlashLoan(FlashParams memory params)
         external
@@ -57,17 +101,21 @@ contract Flashloan is IFlashloan, DodoBase, FlashloanValidation, Withdraw {
         uint256,
         bytes calldata data
     ) internal override {
-        FlashCallbackData memory decoded = abi.decode(
-            data,
-            (FlashCallbackData)
-        );
-
+        // Decode the recieved data to get flash loan details
+        FlashParams memory decoded = abi.decode(data, (FlashParams));
+        // Identify the initial loan token from the decoded routes
         address loanToken = RouteUtils.getInitialToken(decoded.routes[0]);
-
+        // Ensue that the contract has received the loan amount.
         require(
             IERC20(loanToken).balanceOf(address(this)) >= decoded.loanAmount,
             "Failed to borrow loan token"
         );
+        console.log(
+            IERC20(loanToken).balanceOf(address(this)),
+            "Contract Balance after Borrowing"
+        );
+        // Execute the logic for routing the loan through different swaps
+        // routeLoop()
 
         routeLoop(decoded.routes, decoded.loanAmount);
 
@@ -89,19 +137,36 @@ contract Flashloan is IFlashloan, DodoBase, FlashloanValidation, Withdraw {
         emit SentProfit(decoded.me, remained);
     }
 
-    function routeLoop(Route[] memory routes, uint256 totalAmount)
-        internal
-        checkTotalRoutePart(routes)
-    {
+    /**
+     * @dev Iterates over an array of routes and executes swaps
+     * @param routes An array of Route structs, each defining a swap path.
+     * @param totalAmount The total amount of the loan to be distributed across the routes.
+     */
+    function routeLoop(
+        Route[] memory routes,
+        uint256 totalAmount
+    ) internal checkTotalRoutePart(routes) {
         for (uint256 i = 0; i < routes.length; i++) {
+            // Calculate the amount to be used in the current route based on its part of the total loan.
+            //  if rountes[i].part is 10000 (100%), then the amount to be used is the total amount.
+            //  This helps if you want to use a percentage of the total amount for this swap and keep the rest for other purposes.
+            // The partToAmountIn function from the Part library is used for this calculation.
             uint256 amountIn = Part.partToAmountIn(routes[i].part, totalAmount);
+            console.log(totalAmount, "LOAN TOKEN AMOUNT TO SWAP");
             hopLoop(routes[i], amountIn);
         }
     }
 
+    /**
+     * @dev Process a single route by iterating over each hop within the route. each hop represents a token swap operation using a specific protocol.
+     * @param route The Route struct representing a single route for token swaps.
+     * @param totalAmount The amount of tokens to be swapped in this route.
+     */
     function hopLoop(Route memory route, uint256 totalAmount) internal {
         uint256 amountIn = totalAmount;
         for (uint256 i = 0; i < route.hops.length; i++) {
+            // Executes the token swap for the current hop and updates the amount for the next hop.`
+            // The pickProtocol function determines the specific protocol to use for the swap.`
             amountIn = pickProtocol(route.hops[i], amountIn);
         }
     }
@@ -185,6 +250,11 @@ contract Flashloan is IFlashloan, DodoBase, FlashloanValidation, Withdraw {
         );
     }
 
+    /**
+     * takes 3 params, token itself, toAdress which we will approve, and the amount
+     * @param token T
+     * @param to
+     */
     function approveToken(
         address token,
         address to,

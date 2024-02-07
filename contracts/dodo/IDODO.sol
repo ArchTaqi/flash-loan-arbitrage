@@ -10,6 +10,14 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // import {IERC20} from "./intf/IERC20.sol";
 
 interface IDODO {
+
+    /**
+     * @dev baseAmount or quoteAmount one of them will always be zero.
+     * @param baseAmount If we are borrowing basetoken then baseAmount will be greater than zero
+     * @param quoteAmount if we are borrwoing quote amount then quoteamount will be greater than zero
+     * @param assetTo
+     * @param data
+     */
     function flashLoan(
         uint256 baseAmount,
         uint256 quoteAmount,
